@@ -23,49 +23,55 @@ struct CreateXCFramework: ParsableCommand {
     }
 
     func createxcframeworks(with commandBuilder: CommandBuilder) {
-        print("Cleaning Package")
-        execute(commandBuilder.cleanCommand)
+        do {
+            print("Cleaning package '\(packageName)'")
+            try execute(commandBuilder.cleanCommand)
 
-        print("Building Package")
-        commandBuilder.buildCommands.forEach {
-            execute($0)
-        }
-        commandBuilder.createFoldersCommands.forEach {
-            execute($0)
-        }
-
-        let platform = commandBuilder.platforms.first ?? .ios
-        let frameworkNames = frameworkNames(from: commandBuilder.frameworkNamesCommand(for: platform))
-
-        commandBuilder.platforms.forEach { platform in
-            frameworkNames.forEach { name in
-                execute(commandBuilder.createFrameworkCommand(frameworkName: name, platform: platform))
+            print("Start building package '\(packageName)'")
+            try commandBuilder.buildCommands.forEach { sdk, command in
+                print("Building '\(packageName)' for \(sdk)")
+                try execute(command)
             }
-        }
+            try commandBuilder.createFoldersCommands.forEach {
+                try execute($0)
+            }
 
-        print("Creating XCFrameworks")
-        frameworkNames.forEach { name in
-            execute(commandBuilder.xcframeworkCommand(for: name))
-            execute(commandBuilder.copyResourcesCommand(for: name, platfrom: platform))
-        }
+            let platform = commandBuilder.platforms.first ?? .ios
+            let frameworkNames = try frameworkNames(from: commandBuilder.frameworkNamesCommand(for: platform))
 
-        execute(commandBuilder.cleanupCommand)
-        print("Finished")
+            try commandBuilder.platforms.forEach { platform in
+                try frameworkNames.forEach { name in
+                    let command = commandBuilder.createFrameworkCommand(frameworkName: name, platform: platform)
+                    try execute(command)
+                }
+            }
 
-        if showOutput {
-            execute(commandBuilder.openFolderCommand)
+            print("Creating XCFrameworks")
+            try frameworkNames.forEach { name in
+                try execute(commandBuilder.copyResourcesCommand(for: name, platform: platform))
+                try execute(commandBuilder.xcframeworkCommand(for: name))
+            }
+
+            try execute(commandBuilder.cleanupCommand)
+            print("Finished building package '\(packageName)'")
+
+            if showOutput {
+                try execute(commandBuilder.openFolderCommand)
+            }
+        } catch {
+            print("Build failed with: \(error.localizedDescription)")
         }
     }
 
-    func frameworkNames(from command: String) -> [String] {
-        execute(command)
-            .split(separator: "\n")
-            .compactMap { $0.split(separator: "/").last?.dropLast(2) }
-            .map { String($0) }
+    func frameworkNames(from command: String) throws -> [String] {
+        try execute(command)
+                .split(separator: "\n")
+                .compactMap { $0.split(separator: "/").last?.dropLast(2) }
+                .map { String($0) }
     }
 
     @discardableResult
-    func execute(_ command: String) -> String {
+    func execute(_ command: String) throws -> String {
         let task = Process()
         let pipe = Pipe()
 
@@ -73,11 +79,21 @@ struct CreateXCFramework: ParsableCommand {
         task.standardError = pipe
         task.arguments = ["-c", command]
         task.launchPath = "/bin/zsh"
-        task.launch()
+        try task.run()
 
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         let output = String(data: data, encoding: .utf8)!
 
+        task.waitUntilExit()
+
+        guard task.terminationStatus == 0 else {
+            throw "Error \(task.terminationStatus)\n\n\(output)"
+        }
+
         return output
     }
+}
+
+extension String: LocalizedError {
+    public var errorDescription: String? { return self }
 }

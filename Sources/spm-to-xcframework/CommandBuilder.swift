@@ -16,7 +16,7 @@ struct CommandBuilder {
     ) {
         self.scheme = scheme
         self.enableLibraryEvolution = enableLibraryEvolution
-        self.platforms = platforms.isEmpty ? [.ios, .simulator] : platforms
+        self.platforms = platforms.isEmpty ? [.ios, .simulator, .watchos, .watchsimulator] : platforms
 
         if let value = path {
             self.path = (value as NSString).expandingTildeInPath
@@ -46,18 +46,19 @@ extension CommandBuilder {
         "\(baseCommand) clean \(platforms.map(\.destination).joined(separator: " "))"
     }
 
-    var buildCommands: [String] {
-        let commands = platforms.map { platform -> String in
-            """
-            \(baseCommand) \
-            \(buildDirCommand) \
-            \(platform.destination) \
-            -configuration Release \
-            -sdk \(platform.sdk) \
-            BUILD_LIBRARY_FOR_DISTRIBUTION=\(enableLibraryEvolution ? "YES" : "NO") \
-            ARCHS=\"\(platform.archs)\" \
-            BITCODE_GENERATION_MODE=\(platform.supportsBitcode ? "bitcode" : "marker")
-            """
+    var buildCommands: [String: String] {
+        let commands = platforms.reduce(into: [String: String]()) { commands, platform in
+            commands[platform.sdk] =
+                """
+                \(baseCommand) \
+                \(buildDirCommand) \
+                \(platform.destination) \
+                -configuration Release \
+                -sdk \(platform.sdk) \
+                BUILD_LIBRARY_FOR_DISTRIBUTION=\(enableLibraryEvolution ? "YES" : "NO") \
+                ARCHS=\"\(platform.archs)\" \
+                BITCODE_GENERATION_MODE=\(platform.supportsBitcode ? "bitcode" : "marker")
+                """
         }
 
         return commands
@@ -104,12 +105,17 @@ extension CommandBuilder {
         return "xcodebuild -create-xcframework -framework \(allFrameworks) \(enableLibraryEvolution ? "" : "-allow-internal-distribution") -output \(xcframeworkPath)/\(name).xcframework"
     }
 
-    func copyResourcesCommand(for frameworkName: String, platfrom: Platform) -> String {
-        "cp -r \(outputPath)/\(platfrom.buildFolder)/\(frameworkName).bundle \(resourcesPath)"
+    func copyResourcesCommand(for frameworkName: String, platform: Platform) -> String {
+        """
+        if ls \(outputPath)/\(platform.buildFolder)/*_\(frameworkName).bundle 1> /dev/null 2>&1; then
+            cp -r \(outputPath)/\(platform.buildFolder)/*_\(frameworkName).bundle \(resourcesPath)
+        fi
+        """
+//        "cp -r \(outputPath)/\(platform.buildFolder)/\(frameworkName)_\(frameworkName).bundle \(frameworksPath)/\(platform.name)/\(frameworkName).framework"
     }
 
     var cleanupCommand: String {
-        let commands = platforms.map { "rm -rf \(outputPath)/\($0.buildFolder)" } + ["rm -rf \(frameworksPath)"]
+        let commands = platforms.map { "rm -rf \(outputPath)/\($0.buildFolder)" } + ["rm -rf \(frameworksPath)"] + ["rm -rf \(outputPath)/Release"]
         return commands.joined(separator: "; ")
     }
 
